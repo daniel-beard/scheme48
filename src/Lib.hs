@@ -27,7 +27,6 @@ data LispVal = Atom String
              | Float Double
              | Ratio Rational
              | Complex (Complex Double)
-             deriving (Show)
 
 -- Parser
 -------------------------------------------------------------
@@ -196,7 +195,7 @@ parseExpr = parseAtom
          <|> try (do
              string "#("
              x <- parseVector
-             char ')' 
+             char ')'
              return x)
          <|> do
                 char '('
@@ -204,12 +203,79 @@ parseExpr = parseAtom
                 char ')'
                 return x
 
-readExpr :: String -> String
+readExpr :: String -> LispVal 
 readExpr input = case parse parseExpr "lisp" input of
-    Left err -> "No match: " ++ errorBundlePretty err
-    Right val -> "Found value: " ++ show val
+    Left err -> String $ "No match: " ++ errorBundlePretty err
+    Right val -> val
+
+-- Eval
+-------------------------------------------------------------
+
+unwordsList :: [LispVal] -> String
+unwordsList = unwords . map showVal
+
+showVal :: LispVal -> String
+showVal (String contents) = "\"" ++ contents ++ "\""
+showVal (Atom name) = name
+showVal (Number contents) = show contents
+showVal (Bool True) = "#t"
+showVal (Bool False) = "#f"
+showVal (List contents) = "(" ++ unwordsList contents ++ ")"
+showVal (DottedList head tail) = "(" ++ unwordsList head ++ " . " ++ showVal tail ++ ")"
+--TODO: Implement the rest so this isn't required
+showVal _ = error "showVal not implemented for type"
+
+instance Show LispVal where show = showVal
+
+unaryOp :: (LispVal -> LispVal) -> [LispVal] -> LispVal
+unaryOp f [v] = f v
+
+symbolp, numberp, stringp, boolp, listp :: LispVal -> LispVal
+symbolp (Atom _)   = Bool True
+symbolp _          = Bool False
+numberp (Number _) = Bool True
+numberp _          = Bool False
+stringp (String _) = Bool True
+stringp _          = Bool False
+boolp   (Bool _)   = Bool True
+boolp   _          = Bool False
+listp   (List _)   = Bool True
+listp   (DottedList _ _) = Bool False
+listp   _          = Bool False
+
+unpackNum :: LispVal -> Integer
+unpackNum (Number n) = n
+unpackNum _ = 0
+
+numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> LispVal
+numericBinop op params = Number $ foldl1 op $ map unpackNum params
+
+primitives :: [(String, [LispVal] -> LispVal)]
+primitives = [("+", numericBinop (+)),
+              ("-", numericBinop (-)),
+              ("*", numericBinop (*)),
+              ("/", numericBinop div),
+              ("mod", numericBinop mod),
+              ("quotient", numericBinop quot),
+              ("remainder", numericBinop rem),
+              ("symbol?", unaryOp symbolp),
+              ("string?", unaryOp stringp),
+              ("number?", unaryOp numberp),
+              ("bool?", unaryOp boolp),
+              ("list?", unaryOp listp)]
+
+-- lookup primitive, if not present, return a `Bool False` value
+apply :: String -> [LispVal] -> LispVal
+apply func args = maybe (Bool False) ($ args) $ lookup func primitives
+
+eval :: LispVal -> LispVal
+eval val@(String _) = val
+eval val@(Number _) = val
+eval val@(Bool _ ) = val
+eval (List [Atom "quote", val]) = val
+eval (List (Atom func : args)) = apply func $ map eval args
+--TODO: Implement the rest so this isn't required
+eval _ = error "eval not implemented for type"
 
 libMain :: IO ()
-libMain = do
-    (expr:_) <- getArgs
-    putStrLn (readExpr expr)
+libMain = getArgs >>= print . eval . readExpr . head
