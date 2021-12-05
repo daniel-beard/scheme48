@@ -1,8 +1,9 @@
 module Lib
-    ( libMain 
+    ( libMain
     ) where
 
 import Control.Monad
+import Data.Array
 import Data.Complex
 import Data.Ratio
 import Data.Void
@@ -18,6 +19,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 data LispVal = Atom String
              | List [LispVal]
              | DottedList [LispVal] LispVal
+             | Vector (Array Int LispVal)
              | Number Integer
              | String String
              | Bool Bool
@@ -49,10 +51,10 @@ symbol :: Parser Char
 symbol = oneOf "!$%&|*+-/:<=>?@^_~"
 
 spaces :: Parser ()
-spaces = space1 
+spaces = space1
 
 escapedChars :: Parser Char
-escapedChars = do 
+escapedChars = do
     char '\\'
     x <- oneOf "\\\"nrt"
     return $ case x of
@@ -82,7 +84,7 @@ parseCharacter = do
 
 parseAtom :: Parser LispVal
 parseAtom = do
-    first <- letterChar <|> symbol 
+    first <- letterChar <|> symbol
     rest <- many (letterChar <|> digitChar <|> symbol)
     let atom = first:rest
     return $ Atom atom
@@ -139,18 +141,71 @@ parseComplex = do
     y <- try parseFloat <|> try parseDecimal1
     return $ Complex (toDouble x :+ toDouble y)
 
+parseList :: Parser LispVal
+parseList = liftM List $ sepBy parseExpr spaces
+
+parseDottedList :: Parser LispVal
+parseDottedList = do
+    head <- endBy parseExpr spaces
+    tail <- char '.' >> spaces >> parseExpr
+    return $ DottedList head tail
+
+parseQuoted :: Parser LispVal
+parseQuoted = do
+    char '\''
+    x <- parseExpr
+    return $ List [Atom "quote", x]
+
+parseQuasiQuoted :: Parser LispVal
+parseQuasiQuoted = do
+    char '`'
+    x <- parseExpr
+    return $ List [Atom "quasiquote", x]
+
+parseUnQuote :: Parser LispVal
+parseUnQuote = do
+    char ','
+    x <- parseExpr
+    return $ List [Atom "unquote", x]
+
+parseUnQuoteSplicing :: Parser LispVal
+parseUnQuoteSplicing = do
+    char ','
+    char '@'
+    x <- parseExpr
+    return $ List [Atom "unquote-splicing", x]
+
+parseVector :: Parser LispVal
+parseVector = do
+    arrayValues <- sepBy parseExpr spaces
+    return $ Vector (listArray (0, length arrayValues - 1) arrayValues)
+
 parseExpr :: Parser LispVal
-parseExpr = parseAtom 
-         <|> parseString 
+parseExpr = parseAtom
+         <|> parseString
          <|> try parseComplex
          <|> try parseFloat
          <|> try parseRatio
-         <|> try parseNumber 
+         <|> try parseNumber
          <|> try parseBool
          <|> try parseCharacter
+         <|> parseQuoted
+         <|> parseQuasiQuoted
+         <|> parseUnQuote
+         <|> parseUnQuoteSplicing
+         <|> try (do
+             string "#("
+             x <- parseVector
+             char ')' 
+             return x)
+         <|> do
+                char '('
+                x <- try parseList <|> parseDottedList
+                char ')'
+                return x
 
 readExpr :: String -> String
-readExpr input = case parse parseExpr "lisp" input of 
+readExpr input = case parse parseExpr "lisp" input of
     Left err -> "No match: " ++ errorBundlePretty err
     Right val -> "Found value: " ++ show val
 
