@@ -3,6 +3,7 @@ module Lib
     ) where
 
 import Control.Monad
+import Control.Monad.Except
 import Data.Array
 import Data.Complex
 import Data.Ratio
@@ -27,6 +28,16 @@ data LispVal = Atom String
              | Float Double
              | Ratio Rational
              | Complex (Complex Double)
+
+data LispError = NumArgs Integer [LispVal]
+               | TypeMismatch String LispVal
+               | Parser String -- we'll just pass the ouput from errorBundlePretty here
+               | BadSpecialForm String LispVal
+               | NotFunction String String
+               | UnboundVar String String
+               | Default String
+
+type ThrowsError = Either LispError
 
 -- Parser
 -------------------------------------------------------------
@@ -203,10 +214,10 @@ parseExpr = parseAtom
                 char ')'
                 return x
 
-readExpr :: String -> LispVal 
+readExpr :: String -> ThrowsError LispVal 
 readExpr input = case parse parseExpr "lisp" input of
-    Left err -> String $ "No match: " ++ errorBundlePretty err
-    Right val -> val
+    Left err -> throwError $ Parser $ errorBundlePretty err
+    Right val -> return val
 
 -- Eval
 -------------------------------------------------------------
@@ -227,8 +238,26 @@ showVal _ = error "showVal not implemented for type"
 
 instance Show LispVal where show = showVal
 
-unaryOp :: (LispVal -> LispVal) -> [LispVal] -> LispVal
-unaryOp f [v] = f v
+showError :: LispError -> String
+showError (UnboundVar message varname)  = message ++ ": " ++ varname
+showError (BadSpecialForm message form) = message ++ ": " ++ show form
+showError (NotFunction message func)    = message ++ ": " ++ show func
+showError (NumArgs expected found)      = "Expected " ++ show expected ++ " args; found values " ++ unwordsList found
+showError (TypeMismatch expected found) = "Invalid type: expected " ++ expected ++ ", found " ++ show found
+showError (Parser parseErr)             = "Parse error at " ++ show parseErr
+
+instance Show LispError where show = showError
+
+trapError action = catchError action (return . show)
+
+-- Non exhaustiveness here is intentional, it's a programmer error to apply extractValue to a Left val
+extractValue :: ThrowsError a -> a
+extractValue (Right val) = val
+
+unaryOp :: (LispVal -> LispVal) -> [LispVal] -> ThrowsError LispVal
+unaryOp f [v] = return $ f v
+--TODO: This need to be defined better
+unaryOp _ _ = throwError $ Default "Error in unaryOp"
 
 symbolp, numberp, stringp, boolp, listp :: LispVal -> LispVal
 symbolp (Atom _)   = Bool True
@@ -243,14 +272,21 @@ listp   (List _)   = Bool True
 listp   (DottedList _ _) = Bool False
 listp   _          = Bool False
 
-unpackNum :: LispVal -> Integer
-unpackNum (Number n) = n
-unpackNum _ = 0
+unpackNum :: LispVal -> ThrowsError Integer
+unpackNum (Number n) = return n
+unpackNum (String n) = let parsed = reads n in 
+                           if null parsed 
+                             then throwError $ TypeMismatch "number" $ String n
+                             else return $ fst $ parsed !! 0
+unpackNum (List [n]) = unpackNum n
+unpackNum notNum     = throwError $ TypeMismatch "number" notNum
 
-numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> LispVal
-numericBinop op params = Number $ foldl1 op $ map unpackNum params
+numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> ThrowsError LispVal
+numericBinop op []              = throwError $ NumArgs 2 []
+numericBinop op singleVal@[_]   = throwError $ NumArgs 2 singleVal
+numericBinop op params          = mapM unpackNum params >>= return . Number . foldl1 op
 
-primitives :: [(String, [LispVal] -> LispVal)]
+primitives :: [(String, [LispVal] -> ThrowsError LispVal)]
 primitives = [("+", numericBinop (+)),
               ("-", numericBinop (-)),
               ("*", numericBinop (*)),
@@ -265,17 +301,21 @@ primitives = [("+", numericBinop (+)),
               ("list?", unaryOp listp)]
 
 -- lookup primitive, if not present, return a `Bool False` value
-apply :: String -> [LispVal] -> LispVal
-apply func args = maybe (Bool False) ($ args) $ lookup func primitives
+apply :: String -> [LispVal] -> ThrowsError LispVal
+apply func args = maybe (throwError $ NotFunction "Unrecognized primitive function args" func)
+                  ($ args)
+                  (lookup func primitives)
 
-eval :: LispVal -> LispVal
-eval val@(String _) = val
-eval val@(Number _) = val
-eval val@(Bool _ ) = val
-eval (List [Atom "quote", val]) = val
-eval (List (Atom func : args)) = apply func $ map eval args
---TODO: Implement the rest so this isn't required
-eval _ = error "eval not implemented for type"
+eval :: LispVal -> ThrowsError LispVal
+eval val@(String _) = return val
+eval val@(Number _) = return val
+eval val@(Bool _ ) = return val
+eval (List [Atom "quote", val]) = return val
+eval (List (Atom func : args)) = mapM eval args >>= apply func
+eval badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 libMain :: IO ()
-libMain = getArgs >>= print . eval . readExpr . head
+libMain = do
+    args <- getArgs
+    let evaled = liftM show $ readExpr (args !! 0) >>= eval
+    putStrLn $ extractValue $ trapError evaled
