@@ -54,7 +54,6 @@ toDouble :: LispVal -> Double
 toDouble (Float f)  = realToFrac f
 toDouble (Number n) = fromIntegral n
 
-
 type Parser = Parsec Void String
 
 symbol :: Parser Char
@@ -73,6 +72,7 @@ escapedChars = do
         'n'  -> '\n'
         'r'  -> '\r'
         't'  -> '\t'
+        x    -> x
 
 parseString :: Parser LispVal
 parseString = do
@@ -102,40 +102,36 @@ parseAtom = do
 parseBool :: Parser LispVal
 parseBool = do
     char '#'
-    (char 't' >> return (Bool True)) <|> (char 'f' >> return (Bool False))
+    (Bool True <$ char 't') <|> (Bool False <$ char 'f')
 
 parseDecimal1 :: Parser LispVal
-parseDecimal1 = some digitChar >>= (return . Number . read)
+parseDecimal1 = Number . read <$> some digitChar
 
 parseDecimal2 :: Parser LispVal
 parseDecimal2 = do
     try $ string "#x"
-    x <- some digitChar
-    return $ (Number . read) x
+    Number . read <$> some digitChar
 
 parseHex :: Parser LispVal
 parseHex = do
     try $ string "#x"
-    x <- some hexDigitChar
-    return $ Number (hex2dig x)
+    Number . hex2dig <$> some hexDigitChar
 
 parseOct :: Parser LispVal
 parseOct = do
     try $ string "#o"
-    x <- some octDigitChar
-    return $ Number (oct2dig x)
+    Number . oct2dig <$> some octDigitChar
 
 parseBin :: Parser LispVal
 parseBin = do
     try $ string "#b"
-    x <- some binDigitChar
-    return $ Number (bin2dig x)
+    Number . bin2dig <$> some binDigitChar
 
 parseNumber :: Parser LispVal
 parseNumber = parseDecimal1 <|> parseDecimal2 <|> parseHex <|> parseOct <|> parseBin
 
 parseFloat :: Parser LispVal
-parseFloat = L.float >>= (return . Float)
+parseFloat = Float <$> L.float
 
 parseRatio :: Parser LispVal
 parseRatio = do
@@ -152,7 +148,7 @@ parseComplex = do
     return $ Complex (toDouble x :+ toDouble y)
 
 parseList :: Parser LispVal
-parseList = liftM List $ sepBy parseExpr spaces
+parseList = List <$> sepBy parseExpr spaces
 
 parseDottedList :: Parser LispVal
 parseDottedList = do
@@ -214,7 +210,7 @@ parseExpr = parseAtom
                 char ')'
                 return x
 
-readExpr :: String -> ThrowsError LispVal 
+readExpr :: String -> ThrowsError LispVal
 readExpr input = case parse parseExpr "lisp" input of
     Left err -> throwError $ Parser $ errorBundlePretty err
     Right val -> return val
@@ -245,6 +241,7 @@ showError (NotFunction message func)    = message ++ ": " ++ show func
 showError (NumArgs expected found)      = "Expected " ++ show expected ++ " args; found values " ++ unwordsList found
 showError (TypeMismatch expected found) = "Invalid type: expected " ++ expected ++ ", found " ++ show found
 showError (Parser parseErr)             = "Parse error at " ++ show parseErr
+showError (Default message)             = "Error: " ++ message
 
 instance Show LispError where show = showError
 
@@ -274,8 +271,8 @@ listp   _          = Bool False
 
 unpackNum :: LispVal -> ThrowsError Integer
 unpackNum (Number n) = return n
-unpackNum (String n) = let parsed = reads n in 
-                           if null parsed 
+unpackNum (String n) = let parsed = reads n in
+                           if null parsed
                              then throwError $ TypeMismatch "number" $ String n
                              else return $ fst $ parsed !! 0
 unpackNum (List [n]) = unpackNum n
