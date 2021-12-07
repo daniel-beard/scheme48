@@ -231,6 +231,7 @@ showVal (Bool True) = "#t"
 showVal (Bool False) = "#f"
 showVal (List contents) = "(" ++ unwordsList contents ++ ")"
 showVal (DottedList head tail) = "(" ++ unwordsList head ++ " . " ++ showVal tail ++ ")"
+showVal (Float contents) = show contents
 --TODO: Implement the rest so this isn't required
 showVal _ = error "showVal not implemented for type"
 
@@ -254,9 +255,9 @@ extractValue :: ThrowsError a -> a
 extractValue (Right val) = val
 
 unaryOp :: (LispVal -> LispVal) -> [LispVal] -> ThrowsError LispVal
+unaryOp f [] = throwError $ NumArgs 1 []
 unaryOp f [v] = return $ f v
---TODO: This need to be defined better
-unaryOp _ _ = throwError $ Default "Error in unaryOp"
+unaryOp _ args = throwError $ NumArgs 1 args
 
 symbolp, numberp, stringp, boolp, listp :: LispVal -> LispVal
 symbolp (Atom _)   = Bool True
@@ -348,7 +349,8 @@ apply func args = maybe (throwError $ NotFunction "Unrecognized primitive functi
 eval :: LispVal -> ThrowsError LispVal
 eval val@(String _) = return val
 eval val@(Number _) = return val
-eval val@(Bool _ ) = return val
+eval val@(Bool _)   = return val
+eval val@(Float _)  = return val
 eval (List [Atom "quote", val]) = return val
 eval (List [Atom "if", pred, conseq, alt]) = do 
     result <- eval pred
