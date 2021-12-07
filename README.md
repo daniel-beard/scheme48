@@ -1,6 +1,6 @@
 # scheme48
 
-Currently up to: https://en.wikibooks.org/wiki/Write_Yourself_a_Scheme_in_48_Hours/Evaluation,_Part_2
+Currently up to: (Exercise 2): https://en.wikibooks.org/wiki/Write_Yourself_a_Scheme_in_48_Hours/Evaluation,_Part_2
 
 ## Differences to the original source
 
