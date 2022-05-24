@@ -45,8 +45,8 @@ type ThrowsError = Either LispError
 -------------------------------------------------------------
 
 -- Numeric conversion helpers
-oct2dig x = fst $ readOct x !! 0
-hex2dig x = fst $ readHex x !! 0
+oct2dig x = fst $ head (readOct x)
+hex2dig x = fst $ head (readHex x)
 bin2dig  = bin2dig' 0
 bin2dig' digint "" = digint
 bin2dig' digint (x:xs) = let old = 2 * digint + (if x == '0' then 0 else 1) in
@@ -140,13 +140,14 @@ parseRatio = do
     x <- some digitChar
     char '/'
     y <- some digitChar
-    return $ Ratio ((read x) % (read y))
+    return $ Ratio (read x % read y)
 
 parseComplex :: Parser LispVal
 parseComplex = do
     x <- try parseFloat <|> try parseDecimal1
     char '+'
     y <- try parseFloat <|> try parseDecimal1
+    char 'i'
     return $ Complex (toDouble x :+ toDouble y)
 
 parseList :: Parser LispVal
@@ -232,8 +233,11 @@ showVal (Bool False) = "#f"
 showVal (List contents) = "(" ++ unwordsList contents ++ ")"
 showVal (DottedList head tail) = "(" ++ unwordsList head ++ " . " ++ showVal tail ++ ")"
 showVal (Float contents) = show contents
+showVal (Character char) = show char
+showVal (Ratio contents) = show contents
+showVal (Complex contents) = show contents
 --TODO: Implement the rest so this isn't required
-showVal _ = error "showVal not implemented for type"
+-- showVal _ = error "showVal not implemented for type"
 
 instance Show LispVal where show = showVal
 
@@ -259,6 +263,7 @@ unaryOp f [] = throwError $ NumArgs 1 []
 unaryOp f [v] = return $ f v
 unaryOp _ args = throwError $ NumArgs 1 args
 
+--TODODB: Should implement numberp for Complex
 symbolp, numberp, stringp, boolp, listp :: LispVal -> LispVal
 symbolp (Atom _)   = Bool True
 symbolp _          = Bool False
@@ -277,7 +282,7 @@ unpackNum (Number n) = return n
 unpackNum (String n) = let parsed = reads n in
                            if null parsed
                              then throwError $ TypeMismatch "number" $ String n
-                             else return $ fst $ parsed !! 0
+                             else return $ fst $ head parsed
 unpackNum (List [n]) = unpackNum n
 unpackNum notNum     = throwError $ TypeMismatch "number" notNum
 
@@ -297,9 +302,9 @@ numericBinop op singleVal@[_]   = throwError $ NumArgs 2 singleVal
 numericBinop op params          = mapM unpackNum params >>= return . Number . foldl1 op
 
 boolBinop :: (LispVal -> ThrowsError a) -> (a -> a -> Bool) -> [LispVal] -> ThrowsError LispVal
-boolBinop unpacker op args = if length args /= 2 
+boolBinop unpacker op args = if length args /= 2
                              then throwError $ NumArgs 2 args
-                             else do left <- unpacker $ args !! 0
+                             else do left <- unpacker $ head args
                                      right <- unpacker $ args !! 1
                                      return $ Bool $ left `op` right
 
@@ -351,8 +356,9 @@ eval val@(String _) = return val
 eval val@(Number _) = return val
 eval val@(Bool _)   = return val
 eval val@(Float _)  = return val
+eval val@(Complex _) = return val
 eval (List [Atom "quote", val]) = return val
-eval (List [Atom "if", pred, conseq, alt]) = do 
+eval (List [Atom "if", pred, conseq, alt]) = do
     result <- eval pred
     case result of
         Bool False -> eval alt
@@ -403,13 +409,13 @@ cons badArgList                 = throwError $ NumArgs 2 badArgList
 -- eq? and eqv? as basically the same: Two items are the same if they print the same
 -- We can write one function for both, and register just the one function for both symbols
 eqv :: [LispVal] -> ThrowsError LispVal
-eqv [(Bool arg1), (Bool arg2)]             = return $ Bool $ arg1 == arg2
-eqv [(Number arg1), (Number arg2)]         = return $ Bool $ arg1 == arg2
-eqv [(String arg1), (String arg2)]         = return $ Bool $ arg1 == arg2
-eqv [(Atom arg1), (Atom arg2)]             = return $ Bool $ arg1 == arg2
-eqv [(DottedList xs x), (DottedList ys y)] = eqv [List $ xs ++ [x], List $ ys ++ [y]]
-eqv [(List arg1), (List arg2)]             = return $ Bool $ (length arg1 == length arg2) && 
-                                                             (all eqvPair $ zip arg1 arg2)
+eqv [Bool arg1, Bool arg2]             = return $ Bool $ arg1 == arg2
+eqv [Number arg1, Number arg2]         = return $ Bool $ arg1 == arg2
+eqv [String arg1, String arg2]         = return $ Bool $ arg1 == arg2
+eqv [Atom arg1, Atom arg2]             = return $ Bool $ arg1 == arg2
+eqv [DottedList xs x, DottedList ys y] = eqv [List $ xs ++ [x], List $ ys ++ [y]]
+eqv [List arg1, List arg2]             = return $ Bool $ (length arg1 == length arg2) &&
+                                                             all eqvPair (zip arg1 arg2)
      where eqvPair (x1, x2) = case eqv [x1, x2] of
                                 Left err -> False
                                 Right (Bool val) -> val
@@ -436,18 +442,18 @@ unpackEquals arg1 arg2 (AnyUnpacker unpacker) =
              do unpacked1 <- unpacker arg1
                 unpacked2 <- unpacker arg2
                 return $ unpacked1 == unpacked2
-        `catchError` (const $ return False)
+        `catchError` const (return False)
 
 equal :: [LispVal] -> ThrowsError LispVal
 equal [arg1, arg2] = do
     let unpackers = [AnyUnpacker unpackNum, AnyUnpacker unpackStr, AnyUnpacker unpackBool]
     primitiveEquals <- liftM or $ mapM (unpackEquals arg1 arg2) unpackers
     eqvEquals <- eqv [arg1, arg2]
-    return $ Bool $ (primitiveEquals || let (Bool x) = eqvEquals in x)
+    return $ Bool (primitiveEquals || let (Bool x) = eqvEquals in x)
 equal badArgList = throwError $ NumArgs 2 badArgList
 
 libMain :: IO ()
 libMain = do
     args <- getArgs
-    let evaled = liftM show $ readExpr (args !! 0) >>= eval
+    let evaled = fmap show $ readExpr (args !! 0) >>= eval
     putStrLn $ extractValue $ trapError evaled
